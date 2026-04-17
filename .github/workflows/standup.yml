@@ -1,0 +1,139 @@
+name: Daily Standup
+
+on:
+  schedule:
+    - cron: '30 3 * * 1-5'  # 9:00 AM IST Mon-Fri
+  workflow_dispatch:  # allow manual trigger
+
+jobs:
+  standup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send standup to Teams
+        env:
+          GH_PROJECT_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_PASS: ${{ secrets.GMAIL_PASS }}
+          TEAMS_EMAIL: ${{ secrets.TEAMS_EMAIL }}
+        run: |
+          python3 << 'PYEOF'
+          import json, urllib.request, smtplib, os
+          from email.mime.text import MIMEText
+          from email.mime.multipart import MIMEMultipart
+
+          GITHUB_TOKEN = os.environ['GH_PROJECT_TOKEN']
+          GMAIL_USER = os.environ['GMAIL_USER']
+          GMAIL_PASS = os.environ['GMAIL_PASS']
+          TEAMS_EMAIL = os.environ['TEAMS_EMAIL']
+
+          QUERY = """
+          {
+            organization(login: "A4i-tech") {
+              projectV2(number: 1) {
+                items(first: 100) {
+                  nodes {
+                    content {
+                      ... on Issue {
+                        number title url
+                        assignees(first: 10) { nodes { login } }
+                      }
+                    }
+                    fieldValues(first: 20) {
+                      nodes {
+                        ... on ProjectV2ItemFieldSingleSelectValue {
+                          name field { ... on ProjectV2SingleSelectField { name } }
+                        }
+                        ... on ProjectV2ItemFieldDateValue {
+                          date field { ... on ProjectV2Field { name } }
+                        }
+                        ... on ProjectV2ItemFieldMilestoneValue {
+                          milestone { title }
+                          field { ... on ProjectV2Field { name } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+          """
+
+          req = urllib.request.Request(
+              'https://api.github.com/graphql',
+              data=json.dumps({'query': QUERY}).encode(),
+              headers={
+                  'Authorization': f'Bearer {GITHUB_TOKEN}',
+                  'Content-Type': 'application/json',
+                  'User-Agent': 'standup-bot'
+              }
+          )
+          with urllib.request.urlopen(req) as resp:
+              data = json.loads(resp.read())
+
+          items = data['data']['organization']['projectV2']['items']['nodes']
+          assigned, reviewer = [], []
+
+          for item in items:
+              content = item.get('content', {})
+              if not content:
+                  continue
+              assignees = [u['login'].lower() for u in content.get('assignees', {}).get('nodes', [])]
+              fvs = {}
+              for fv in item['fieldValues']['nodes']:
+                  fname = fv.get('field', {}).get('name', '')
+                  fvs[fname] = (
+                      fv.get('name') or
+                      fv.get('date') or
+                      (fv.get('milestone') or {}).get('title', '')
+                  )
+              r1 = fvs.get('PR Reviewer 1', '').lower()
+              r2 = fvs.get('PR Reviewer 2', '').lower()
+              row = {
+                  'num': content.get('number'),
+                  'title': content.get('title', '')[:55],
+                  'status': fvs.get('Status', 'N/A'),
+                  'milestone': fvs.get('Milestone', 'N/A'),
+                  'date': fvs.get('Date', 'N/A'),
+                  'release': fvs.get('Release', 'N/A'),
+                  'url': content.get('url', '')
+              }
+              if 'farmanahmed888' in assignees:
+                  assigned.append(row)
+              if 'farman' in r1 or 'farman' in r2:
+                  reviewer.append(row)
+
+          def html_table(rows):
+              if not rows:
+                  return '<p><i>None</i></p>'
+              cols = ['#', 'Title', 'Status', 'Milestone', 'Date', 'Release']
+              th = ''.join(f'<th style="border:1px solid #ddd;padding:6px;background:#f4f4f4">{c}</th>' for c in cols)
+              rows_html = ''
+              for r in rows:
+                  cells = [
+                      f'<a href="{r["url"]}">#{r["num"]}</a>',
+                      r['title'], r['status'], r['milestone'], r['date'], r['release']
+                  ]
+                  rows_html += '<tr>' + ''.join(f'<td style="border:1px solid #ddd;padding:6px">{c}</td>' for c in cells) + '</tr>'
+              return f'<table style="border-collapse:collapse;width:100%"><tr>{th}</tr>{rows_html}</table>'
+
+          html = f"""
+          <h2>Farman Daily Standup</h2>
+          <h3>Assigned to Me ({len(assigned)})</h3>
+          {html_table(assigned)}
+          <h3>Where I am Reviewer ({len(reviewer)})</h3>
+          {html_table(reviewer)}
+          """
+
+          msg = MIMEMultipart('alternative')
+          msg['Subject'] = 'Daily Standup - GitHub Tasks'
+          msg['From'] = GMAIL_USER
+          msg['To'] = TEAMS_EMAIL
+          msg.attach(MIMEText(html, 'html'))
+
+          with smtplib.SMTP('smtp.gmail.com', 587) as s:
+              s.starttls()
+              s.login(GMAIL_USER, GMAIL_PASS)
+              s.sendmail(GMAIL_USER, TEAMS_EMAIL, msg.as_string())
+              print('Email sent to Teams channel')
+          PYEOF
