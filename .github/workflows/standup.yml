@@ -34,7 +34,7 @@ jobs:
                   nodes {
                     content {
                       ... on Issue {
-                        number title url
+                        number title url state
                         assignees(first: 10) { nodes { login } }
                       }
                     }
@@ -78,16 +78,20 @@ jobs:
               content = item.get('content', {})
               if not content:
                   continue
+              # skip closed issues
+              if content.get('state', '').upper() == 'CLOSED':
+                  continue
               assignees = [u['login'].lower() for u in content.get('assignees', {}).get('nodes', [])]
               fvs = {}
               for fv in item['fieldValues']['nodes']:
                   fname = fv.get('field', {}).get('name', '')
-                  fvs[fname] = (
-                      fv.get('name') or
-                      fv.get('date') or
-                      (fv.get('milestone') or {}).get('title', '')
-                  )
-              if fvs.get('Status') == 'Done':
+                  if not fname:
+                      continue
+                  val = fv.get('name') or fv.get('date') or (fv.get('milestone') or {}).get('title', '')
+                  if val:
+                      fvs[fname] = val
+              # skip Done status
+              if fvs.get('Status', '').strip() == 'Done':
                   continue
               r1 = fvs.get('PR Reviewer 1', '').lower()
               r2 = fvs.get('PR Reviewer 2', '').lower()
