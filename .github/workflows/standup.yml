@@ -87,6 +87,8 @@ jobs:
                       fv.get('date') or
                       (fv.get('milestone') or {}).get('title', '')
                   )
+              if fvs.get('Status') == 'Done':
+                  continue
               r1 = fvs.get('PR Reviewer 1', '').lower()
               r2 = fvs.get('PR Reviewer 2', '').lower()
               row = {
