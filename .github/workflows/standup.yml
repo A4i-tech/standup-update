@@ -26,6 +26,8 @@ jobs:
           GMAIL_PASS = os.environ['GMAIL_PASS']
           TEAMS_EMAIL = os.environ['TEAMS_EMAIL']
 
+          ACTIVE_STATUSES = {'Todo', 'In Development', 'Awaiting Review', 'Awaiting Release'}
+
           QUERY = """
           {
             organization(login: "A4i-tech") {
@@ -34,7 +36,7 @@ jobs:
                   nodes {
                     content {
                       ... on Issue {
-                        number title url state
+                        number title url
                         assignees(first: 10) { nodes { login } }
                       }
                     }
@@ -78,10 +80,9 @@ jobs:
               content = item.get('content', {})
               if not content:
                   continue
-              # skip closed issues
-              if content.get('state', '').upper() == 'CLOSED':
-                  continue
+
               assignees = [u['login'].lower() for u in content.get('assignees', {}).get('nodes', [])]
+
               fvs = {}
               for fv in item['fieldValues']['nodes']:
                   fname = fv.get('field', {}).get('name', '')
@@ -90,20 +91,23 @@ jobs:
                   val = fv.get('name') or fv.get('date') or (fv.get('milestone') or {}).get('title', '')
                   if val:
                       fvs[fname] = val
-              # skip Done status
-              if fvs.get('Status', '').strip() == 'Done':
+
+              status = fvs.get('Status', '')
+              if status not in ACTIVE_STATUSES:
                   continue
+
               r1 = fvs.get('PR Reviewer 1', '').lower()
               r2 = fvs.get('PR Reviewer 2', '').lower()
               row = {
                   'num': content.get('number'),
                   'title': content.get('title', '')[:55],
-                  'status': fvs.get('Status', 'N/A'),
+                  'status': status,
                   'milestone': fvs.get('Milestone', 'N/A'),
                   'date': fvs.get('Date', 'N/A'),
                   'release': fvs.get('Release', 'N/A'),
                   'url': content.get('url', '')
               }
+
               if 'farmanahmed888' in assignees:
                   assigned.append(row)
               if 'farman' in r1 or 'farman' in r2:
