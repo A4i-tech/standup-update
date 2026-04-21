@@ -17,7 +17,7 @@ jobs:
           TEAMS_EMAIL: ${{ secrets.TEAMS_EMAIL }}
         run: |
           python3 << 'PYEOF'
-          import json, urllib.request, urllib.parse, urllib.error, smtplib, os, time
+          import json, urllib.request, urllib.parse, urllib.error, smtplib, os
           from email.mime.text import MIMEText
           from email.mime.multipart import MIMEMultipart
 
@@ -154,7 +154,6 @@ jobs:
               if len(repo_assigned) < 100:
                   break
               page += 1
-              time.sleep(1)
 
           def html_table(rows):
               if not rows:
