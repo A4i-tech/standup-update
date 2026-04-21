@@ -113,6 +113,34 @@ jobs:
               if 'farman' in r1 or 'farman' in r2:
                   reviewer.append(row)
 
+          assigned_urls = {r['url'] for r in assigned}
+
+          search_req = urllib.request.Request(
+              'https://api.github.com/search/issues?q=repo:A4i-tech/.github+is:issue+is:open+assignee:farmanahmed888&per_page=100',
+              headers={
+                  'Authorization': f'Bearer {GITHUB_TOKEN}',
+                  'Accept': 'application/vnd.github+json',
+                  'User-Agent': 'standup-bot'
+              }
+          )
+          with urllib.request.urlopen(search_req) as resp:
+              repo_assigned = json.loads(resp.read()).get('items', [])
+
+          for issue in repo_assigned:
+              url = issue.get('html_url', '')
+              if not url or url in assigned_urls:
+                  continue
+              assigned.append({
+                  'num': issue.get('number'),
+                  'title': (issue.get('title') or '')[:55],
+                  'status': 'N/A',
+                  'milestone': 'N/A',
+                  'date': 'N/A',
+                  'release': 'N/A',
+                  'url': url
+              })
+              assigned_urls.add(url)
+
           def html_table(rows):
               if not rows:
                   return '<p><i>None</i></p>'
