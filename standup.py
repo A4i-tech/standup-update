@@ -167,7 +167,6 @@ for key, ticket in tickets.items():
         emergency = ' &#128680;' if days > 15 else ''
         reviewed_rows.append({
             'issue': issue_cell,
-            'assignees': ticket['assignees'],
             'reviewers': pr['_reviewers'],
             'pr': f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>',
             'days': str(days),
@@ -185,20 +184,6 @@ def html_table(rows, columns):
     for r in rows:
         rows_html += '<tr>' + ''.join(f'<td style="border:1px solid #ddd;padding:6px">{c}</td>' for c in r) + '</tr>'
     return f'<table style="border-collapse:collapse;width:100%"><tr>{th}</tr>{rows_html}</table>'
-
-rows_by_assignee = {}
-for r in reviewed_rows:
-    for assignee in r['assignees']:
-        rows_by_assignee.setdefault(assignee, []).append(r)
-
-sections = ''.join(
-    f'<h3>{assignee} ({len(rows_by_assignee[assignee])})</h3>'
-    + html_table(
-        [[r['issue'], r['pr'], r['days'], r['light']] for r in rows_by_assignee[assignee]],
-        ['Issue', 'PR', 'Days Since Review Raised', 'Status'],
-    )
-    for assignee in sorted(rows_by_assignee, key=str.lower)
-)
 
 rows_by_reviewer = {}
 for r in reviewed_rows:
@@ -236,8 +221,6 @@ html = f"""
 {legend}
 <h2>Pending Reviews (by Reviewer)</h2>
 {reviewer_sections}
-<h2>By Assignee</h2>
-{sections}
 {no_pr_section}
 """
 
