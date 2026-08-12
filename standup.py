@@ -137,46 +137,55 @@ def traffic_light(days):
         return '#f9a825', 'Yellow'
     return '#c62828', 'Red'
 
-rows = []
+reviewed_rows, no_pr_rows = [], []
 for key, ticket in tickets.items():
     repo, issue_num = key
     pr = pr_by_ticket.get(key)
+    issue_cell = f'<a href="{ticket["url"]}">{repo}#{issue_num}</a> {ticket["title"]}'
     if pr:
         days = days_since(review_raised_at(pr['_repo'], pr))
         color, label = traffic_light(days)
         emergency = ' &#128680;' if days > 15 else ''
-        pr_cell = f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>'
-        days_cell = str(days)
-        light_cell = f'<span style="color:{color};font-weight:bold">&#9679; {label}</span>{emergency}'
+        reviewed_rows.append({
+            'issue': issue_cell,
+            'assignees': ticket['assignees'],
+            'pr': f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>',
+            'days': str(days),
+            'light': f'<span style="color:{color};font-weight:bold">&#9679; {label}</span>{emergency}',
+        })
     else:
-        pr_cell, days_cell, light_cell = '<i>none</i>', '-', '-'
-    rows.append({
-        'issue': f'<a href="{ticket["url"]}">{repo}#{issue_num}</a> {ticket["title"]}',
-        'assignees': ticket['assignees'],
-        'pr': pr_cell,
-        'days': days_cell,
-        'light': light_cell,
-    })
+        no_pr_rows.append({
+            'issue': issue_cell,
+            'assignees': ', '.join(ticket['assignees']),
+        })
 
-def html_table(rows):
-    th = ''.join(
-        f'<th style="border:1px solid #ddd;padding:6px;background:#f4f4f4">{c}</th>'
-        for c in ['Issue', 'PR', 'Days Since Review Raised', 'Status']
-    )
+def html_table(rows, columns):
+    th = ''.join(f'<th style="border:1px solid #ddd;padding:6px;background:#f4f4f4">{c}</th>' for c in columns)
     rows_html = ''
     for r in rows:
-        cells = [r['issue'], r['pr'], r['days'], r['light']]
-        rows_html += '<tr>' + ''.join(f'<td style="border:1px solid #ddd;padding:6px">{c}</td>' for c in cells) + '</tr>'
+        rows_html += '<tr>' + ''.join(f'<td style="border:1px solid #ddd;padding:6px">{c}</td>' for c in r) + '</tr>'
     return f'<table style="border-collapse:collapse;width:100%"><tr>{th}</tr>{rows_html}</table>'
 
 rows_by_assignee = {}
-for r in rows:
+for r in reviewed_rows:
     for assignee in r['assignees']:
         rows_by_assignee.setdefault(assignee, []).append(r)
 
 sections = ''.join(
-    f'<h3>{assignee} ({len(rows_by_assignee[assignee])})</h3>{html_table(rows_by_assignee[assignee])}'
+    f'<h3>{assignee} ({len(rows_by_assignee[assignee])})</h3>'
+    + html_table(
+        [[r['issue'], r['pr'], r['days'], r['light']] for r in rows_by_assignee[assignee]],
+        ['Issue', 'PR', 'Days Since Review Raised', 'Status'],
+    )
     for assignee in sorted(rows_by_assignee, key=str.lower)
+)
+
+no_pr_section = (
+    f'<h3>No PR Yet ({len(no_pr_rows)})</h3>'
+    + html_table(
+        [[r['issue'], r['assignees']] for r in no_pr_rows],
+        ['Issue', 'Assignee'],
+    )
 )
 
 legend = """
@@ -192,6 +201,7 @@ legend = """
 html = f"""
 {legend}
 {sections}
+{no_pr_section}
 """
 
 msg = MIMEMultipart('alternative')
