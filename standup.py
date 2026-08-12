@@ -90,7 +90,7 @@ for item in items:
         'title': content['title'][:55],
         'url': content['url'],
         'status': status,
-        'assignees': ', '.join(assignees),
+        'assignees': assignees,
     }
 
 # 2. Open PRs in the tracked repos, with the issues each PR closes
@@ -152,29 +152,47 @@ for key, ticket in tickets.items():
         pr_cell, days_cell, light_cell = '<i>none</i>', '-', '-'
     rows.append({
         'issue': f'<a href="{ticket["url"]}">{repo}#{issue_num}</a> {ticket["title"]}',
-        'assignee': ticket['assignees'],
+        'assignees': ticket['assignees'],
         'pr': pr_cell,
         'days': days_cell,
         'light': light_cell,
     })
 
 def html_table(rows):
-    if not rows:
-        return '<p><i>None</i></p>'
     th = ''.join(
         f'<th style="border:1px solid #ddd;padding:6px;background:#f4f4f4">{c}</th>'
-        for c in ['Issue', 'Assignee', 'PR', 'Days Since Review Raised', 'Status']
+        for c in ['Issue', 'PR', 'Days Since Review Raised', 'Status']
     )
     rows_html = ''
     for r in rows:
-        cells = [r['issue'], r['assignee'], r['pr'], r['days'], r['light']]
+        cells = [r['issue'], r['pr'], r['days'], r['light']]
         rows_html += '<tr>' + ''.join(f'<td style="border:1px solid #ddd;padding:6px">{c}</td>' for c in cells) + '</tr>'
     return f'<table style="border-collapse:collapse;width:100%"><tr>{th}</tr>{rows_html}</table>'
 
+rows_by_assignee = {}
+for r in rows:
+    for assignee in r['assignees']:
+        rows_by_assignee.setdefault(assignee, []).append(r)
+
+sections = ''.join(
+    f'<h3>{assignee} ({len(rows_by_assignee[assignee])})</h3>{html_table(rows_by_assignee[assignee])}'
+    for assignee in sorted(rows_by_assignee, key=str.lower)
+)
+
+legend = """
+<p style="font-size:13px;color:#555">
+  <b>Legend:</b>
+  <span style="color:#2e7d32">&#9679; Green</span> = 0-2 days &middot;
+  <span style="color:#f9a825">&#9679; Yellow</span> = 3-5 days &middot;
+  <span style="color:#c62828">&#9679; Red</span> = 6+ days &middot;
+  &#128680; = 15+ days
+</p>
+"""
+
 html = f"""
 <h2>Farman Daily Standup</h2>
-<h3>Issue &rarr; PR Review Tracker ({len(rows)})</h3>
-{html_table(rows)}
+{legend}
+{sections}
 """
 
 msg = MIMEMultipart('alternative')
