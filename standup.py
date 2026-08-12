@@ -190,7 +190,6 @@ legend = """
 """
 
 html = f"""
-<h2>Farman Daily Standup</h2>
 {legend}
 {sections}
 """
