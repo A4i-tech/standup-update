@@ -107,9 +107,6 @@ query($owner: String!, $repo: String!) {
         reviewRequests(first: 10) {
           nodes { requestedReviewer { ... on User { login } } }
         }
-        latestReviews(first: 10) {
-          nodes { author { login } state }
-        }
       }
     }
   }
@@ -121,11 +118,7 @@ def pending_reviewers(pr):
         n['requestedReviewer']['login'] for n in pr['reviewRequests']['nodes']
         if n['requestedReviewer']
     }
-    unresolved = {
-        r['author']['login'] for r in pr['latestReviews']['nodes']
-        if r['state'] != 'APPROVED' and r['author']
-    }
-    return (requested | unresolved) - BOT_LOGINS
+    return requested - BOT_LOGINS
 
 pr_by_ticket = {}  # (issue_repo, issue_number) -> pr dict
 for pr_repo in PR_REPOS:
