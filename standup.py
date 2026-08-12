@@ -4,8 +4,12 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 
 GITHUB_TOKEN = os.environ['GH_PROJECT_TOKEN']
-GMAIL_USER = os.environ['GMAIL_USER']
-GMAIL_PASS = os.environ['GMAIL_PASS']
+SMTP_HOST = os.environ['SMTP_HOST']
+SMTP_PORT = int(os.environ['SMTP_PORT'])
+SMTP_SECURE = os.environ['SMTP_SECURE'].lower() == 'true'
+SMTP_USERNAME = os.environ['SMTP_USERNAME']
+SMTP_PASSWORD = os.environ['SMTP_PASSWORD']
+MAIL_FROM_ADDRESS = os.environ['MAIL_FROM_ADDRESS']
 TEAMS_EMAIL = os.environ['TEAMS_EMAIL']
 TARGET_USER = 'farmanahmed888'
 ORG = 'A4i-tech'
@@ -219,12 +223,14 @@ html = f"""
 
 msg = MIMEMultipart('alternative')
 msg['Subject'] = 'Daily Standup - GitHub Tasks'
-msg['From'] = GMAIL_USER
+msg['From'] = MAIL_FROM_ADDRESS
 msg['To'] = TEAMS_EMAIL
 msg.attach(MIMEText(html, 'html'))
 
-with smtplib.SMTP('smtp.gmail.com', 587) as s:
-    s.starttls()
-    s.login(GMAIL_USER, GMAIL_PASS)
-    s.sendmail(GMAIL_USER, TEAMS_EMAIL, msg.as_string())
+smtp_cls = smtplib.SMTP_SSL if SMTP_SECURE else smtplib.SMTP
+with smtp_cls(SMTP_HOST, SMTP_PORT) as s:
+    if not SMTP_SECURE:
+        s.starttls()
+    s.login(SMTP_USERNAME, SMTP_PASSWORD)
+    s.sendmail(MAIL_FROM_ADDRESS, TEAMS_EMAIL, msg.as_string())
     print('Email sent to Teams channel')
