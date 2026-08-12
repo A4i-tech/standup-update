@@ -10,6 +10,7 @@ TEAMS_EMAIL = os.environ['TEAMS_EMAIL']
 TARGET_USER = 'farmanahmed888'
 ORG = 'A4i-tech'
 PR_REPOS = ['byoeb', 'SEEDS', 'Shiksha-Copilot']
+BOT_LOGINS = {'a4i-architect'}
 
 ACTIVE_STATUSES = {'Todo', 'In Development', 'Awaiting Review', 'Awaiting Release'}
 
@@ -103,11 +104,28 @@ query($owner: String!, $repo: String!) {
         closingIssuesReferences(first: 10) {
           nodes { number repository { name } }
         }
+        reviewRequests(first: 10) {
+          nodes { requestedReviewer { ... on User { login } } }
+        }
+        latestReviews(first: 10) {
+          nodes { author { login } state }
+        }
       }
     }
   }
 }
 """
+
+def pending_reviewers(pr):
+    requested = {
+        n['requestedReviewer']['login'] for n in pr['reviewRequests']['nodes']
+        if n['requestedReviewer']
+    }
+    unresolved = {
+        r['author']['login'] for r in pr['latestReviews']['nodes']
+        if r['state'] != 'APPROVED' and r['author']
+    }
+    return (requested | unresolved) - BOT_LOGINS
 
 pr_by_ticket = {}  # (issue_repo, issue_number) -> pr dict
 for pr_repo in PR_REPOS:
@@ -115,6 +133,7 @@ for pr_repo in PR_REPOS:
     prs = resp['data']['repository']['pullRequests']['nodes']
     for pr in prs:
         pr['_repo'] = pr_repo
+        pr['_reviewers'] = pending_reviewers(pr)
         for closed_issue in pr['closingIssuesReferences']['nodes']:
             key = (closed_issue['repository']['name'], closed_issue['number'])
             if key in tickets and key not in pr_by_ticket:
@@ -149,6 +168,7 @@ for key, ticket in tickets.items():
         reviewed_rows.append({
             'issue': issue_cell,
             'assignees': ticket['assignees'],
+            'reviewers': pr['_reviewers'],
             'pr': f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>',
             'days': str(days),
             'light': f'<span style="color:{color};font-weight:bold">&#9679; {label}</span>{emergency}',
@@ -180,6 +200,20 @@ sections = ''.join(
     for assignee in sorted(rows_by_assignee, key=str.lower)
 )
 
+rows_by_reviewer = {}
+for r in reviewed_rows:
+    for reviewer in r['reviewers']:
+        rows_by_reviewer.setdefault(reviewer, []).append(r)
+
+reviewer_sections = ''.join(
+    f'<h3>Needs review from {reviewer} ({len(rows_by_reviewer[reviewer])})</h3>'
+    + html_table(
+        [[r['issue'], r['pr'], r['days'], r['light']] for r in rows_by_reviewer[reviewer]],
+        ['Issue', 'PR', 'Days Since Review Raised', 'Status'],
+    )
+    for reviewer in sorted(rows_by_reviewer, key=str.lower)
+)
+
 no_pr_section = (
     f'<h3>No PR Yet ({len(no_pr_rows)})</h3>'
     + html_table(
@@ -200,6 +234,9 @@ legend = """
 
 html = f"""
 {legend}
+<h2>Pending Reviews (by Reviewer)</h2>
+{reviewer_sections}
+<h2>By Assignee</h2>
 {sections}
 {no_pr_section}
 """
