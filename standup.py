@@ -11,7 +11,6 @@ SMTP_USERNAME = os.environ['SMTP_USERNAME']
 SMTP_PASSWORD = os.environ['SMTP_PASSWORD']
 MAIL_FROM_ADDRESS = os.environ['MAIL_FROM_ADDRESS']
 TEAMS_EMAIL = os.environ['TEAMS_EMAIL']
-TEAMS_WEBHOOK_URL = os.environ['TEAMS_WEBHOOK_URL']
 TARGET_USER = 'farmanahmed888'
 ORG = 'A4i-tech'
 PR_REPOS = ['byoeb', 'SEEDS', 'Shiksha-Copilot']
@@ -235,41 +234,3 @@ with smtp_cls(SMTP_HOST, SMTP_PORT) as s:
     s.login(SMTP_USERNAME, SMTP_PASSWORD)
     s.sendmail(MAIL_FROM_ADDRESS, TEAMS_EMAIL, msg.as_string())
     print('Email sent to Teams channel')
-
-# Ping @channel so the post above gets a notification regardless of anyone's
-# personal channel notification settings (email-to-channel can't do this).
-adaptive_card = {
-    'type': 'message',
-    'attachments': [{
-        'contentType': 'application/vnd.microsoft.card.adaptive',
-        'content': {
-            'type': 'AdaptiveCard',
-            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-            'version': '1.4',
-            'body': [{
-                'type': 'TextBlock',
-                'wrap': True,
-                'text': (
-                    f'<at>channel</at> New Daily Standup posted — '
-                    f'{len(rows_by_reviewer)} reviewer(s) with pending PR reviews, '
-                    f'{len(no_pr_rows)} ticket(s) without a PR yet. Check email for the full report.'
-                ),
-            }],
-            'msteams': {
-                'entities': [{
-                    'type': 'mention',
-                    'text': '<at>channel</at>',
-                    'mentioned': {'id': 'channel', 'name': 'Channel'},
-                }],
-            },
-        },
-    }],
-}
-
-req = urllib.request.Request(
-    TEAMS_WEBHOOK_URL,
-    data=json.dumps(adaptive_card).encode(),
-    headers={'Content-Type': 'application/json'},
-)
-with urllib.request.urlopen(req) as resp:
-    print('Teams channel notified, status:', resp.status)
