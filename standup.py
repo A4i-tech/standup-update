@@ -150,8 +150,14 @@ def traffic_light(days):
     if days <= 2:
         return '#2e7d32', 'Green'
     if days <= 5:
-        return '#f9a825', 'Yellow'
+        return '#b8860b', 'Yellow'
     return '#c62828', 'Red'
+
+def pill(color, label):
+    return (
+        f'<span style="background:{color};color:#fff;font-weight:bold;'
+        f'padding:2px 8px;border-radius:10px;white-space:nowrap">{label}</span>'
+    )
 
 reviewed_rows, no_pr_rows = [], []
 for key, ticket in tickets.items():
@@ -167,7 +173,7 @@ for key, ticket in tickets.items():
             'reviewers': pr['_reviewers'],
             'pr': f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>',
             'days': str(days),
-            'light': f'<span style="color:{color};font-weight:bold">&#9679; {label}</span>{emergency}',
+            'light': f'{pill(color, label)}{emergency}',
         })
     else:
         no_pr_rows.append({
@@ -176,7 +182,10 @@ for key, ticket in tickets.items():
         })
 
 def html_table(rows, columns):
-    th = ''.join(f'<th style="border:1px solid #ddd;padding:6px;background:#f4f4f4">{c}</th>' for c in columns)
+    th = ''.join(
+        f'<th style="border:1px solid #ddd;padding:6px;background:#2d2d2d;color:#fff">{c}</th>'
+        for c in columns
+    )
     rows_html = ''
     for r in rows:
         rows_html += '<tr>' + ''.join(f'<td style="border:1px solid #ddd;padding:6px">{c}</td>' for c in r) + '</tr>'
@@ -204,12 +213,12 @@ no_pr_section = (
     )
 )
 
-legend = """
-<p style="font-size:13px;color:#555">
+legend = f"""
+<p style="font-size:13px">
   <b>Legend:</b>
-  <span style="color:#2e7d32">&#9679; Green</span> = 0-2 days &middot;
-  <span style="color:#f9a825">&#9679; Yellow</span> = 3-5 days &middot;
-  <span style="color:#c62828">&#9679; Red</span> = 6+ days &middot;
+  {pill('#2e7d32', 'Green')} 0-2 days &middot;
+  {pill('#b8860b', 'Yellow')} 3-5 days &middot;
+  {pill('#c62828', 'Red')} 6+ days &middot;
   &#128680; = 15+ days
 </p>
 """
