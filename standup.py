@@ -176,6 +176,7 @@ for key, ticket in tickets.items():
         emergency = ' &#128680;' if days > 15 else ''
         reviewed_rows.append({
             'issue': issue_cell,
+            'assignees': ', '.join(ticket['assignees']),
             'reviewers': pr['_reviewers'],
             'pr': f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>',
             'days': str(days),
@@ -205,8 +206,8 @@ for r in reviewed_rows:
 reviewer_sections = ''.join(
     f'<h3>Needs review from {reviewer} ({len(rows_by_reviewer[reviewer])})</h3>'
     + html_table(
-        [[r['issue'], r['pr'], r['days'], r['light']] for r in rows_by_reviewer[reviewer]],
-        ['Issue', 'PR', 'Days Since Review Raised', 'Status'],
+        [[r['issue'], r['assignees'], r['pr'], r['days'], r['light']] for r in rows_by_reviewer[reviewer]],
+        ['Issue', 'Assignee', 'PR', 'Days Since Review Raised', 'Status'],
     )
     for reviewer in sorted(rows_by_reviewer, key=str.lower)
 )
