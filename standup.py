@@ -98,13 +98,15 @@ for item in items:
         'assignees': assignees,
     }
 
-# 2. Open PRs in the tracked repos, with the issues each PR closes
+# 2. Open and merged PRs in the tracked repos, with the issues each PR closes.
+# Merged PRs count as "handled" (e.g. merged to a staging branch that never
+# auto-closed the issue) even though they no longer need review.
 PR_QUERY = """
 query($owner: String!, $repo: String!) {
   repository(owner: $owner, name: $repo) {
-    pullRequests(states: OPEN, first: 100) {
+    pullRequests(states: [OPEN, MERGED], first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) {
       nodes {
-        number title url createdAt
+        number title url createdAt state
         closingIssuesReferences(first: 10) {
           nodes { number repository { name } }
         }
@@ -124,7 +126,8 @@ def pending_reviewers(pr):
     }
     return requested - BOT_LOGINS
 
-pr_by_ticket = {}  # (issue_repo, issue_number) -> pr dict
+pr_by_ticket = {}  # (issue_repo, issue_number) -> open pr dict
+handled_tickets = set()  # (issue_repo, issue_number) with any open or merged PR
 for pr_repo in PR_REPOS:
     resp = gh_graphql(PR_QUERY, {'owner': ORG, 'repo': pr_repo})
     prs = resp['data']['repository']['pullRequests']['nodes']
@@ -133,7 +136,10 @@ for pr_repo in PR_REPOS:
         pr['_reviewers'] = pending_reviewers(pr)
         for closed_issue in pr['closingIssuesReferences']['nodes']:
             key = (closed_issue['repository']['name'], closed_issue['number'])
-            if key in tickets and key not in pr_by_ticket:
+            if key not in tickets:
+                continue
+            handled_tickets.add(key)
+            if pr['state'] == 'OPEN' and key not in pr_by_ticket:
                 pr_by_ticket[key] = pr
 
 # 3. First "review requested" timestamp per matched PR (fallback: PR createdAt)
@@ -175,7 +181,7 @@ for key, ticket in tickets.items():
             'days': str(days),
             'light': f'{pill(color, label)}{emergency}',
         })
-    else:
+    elif key not in handled_tickets:
         no_pr_rows.append({
             'issue': issue_cell,
             'assignees': ', '.join(ticket['assignees']),
