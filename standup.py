@@ -45,10 +45,11 @@ def gh_rest(path):
 
 # 1. Tickets assigned to TARGET_USER in org project #1
 PROJECT_QUERY = """
-{
-  organization(login: "%s") {
+query($org: String!, $after: String) {
+  organization(login: $org) {
     projectV2(number: 1) {
-      items(first: 100) {
+      items(first: 100, after: $after) {
+        pageInfo { hasNextPage endCursor }
         nodes {
           content {
             ... on Issue {
@@ -69,10 +70,17 @@ PROJECT_QUERY = """
     }
   }
 }
-""" % ORG
+"""
 
-data = gh_graphql(PROJECT_QUERY)
-items = data['data']['organization']['projectV2']['items']['nodes']
+items = []
+after = None
+while True:
+    resp = gh_graphql(PROJECT_QUERY, {'org': ORG, 'after': after})
+    page = resp['data']['organization']['projectV2']['items']
+    items.extend(page['nodes'])
+    if not page['pageInfo']['hasNextPage']:
+        break
+    after = page['pageInfo']['endCursor']
 
 tickets = {}  # (repo, number) -> {title, url, status, assignees}
 for item in items:
@@ -102,11 +110,13 @@ for item in items:
 # Merged PRs count as "handled" (e.g. merged to a staging branch that never
 # auto-closed the issue) even though they no longer need review.
 PR_QUERY = """
-query($owner: String!, $repo: String!) {
+query($owner: String!, $repo: String!, $after: String) {
   repository(owner: $owner, name: $repo) {
-    pullRequests(states: [OPEN, MERGED], first: 100, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    pullRequests(states: [OPEN, MERGED], first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
+      pageInfo { hasNextPage endCursor }
       nodes {
         number title url createdAt state
+        author { login }
         closingIssuesReferences(first: 10) {
           nodes { number repository { name } }
         }
@@ -126,11 +136,20 @@ def pending_reviewers(pr):
     }
     return requested - BOT_LOGINS
 
+def fetch_prs(pr_repo):
+    prs, after = [], None
+    while True:
+        resp = gh_graphql(PR_QUERY, {'owner': ORG, 'repo': pr_repo, 'after': after})
+        page = resp['data']['repository']['pullRequests']
+        prs.extend(page['nodes'])
+        if not page['pageInfo']['hasNextPage']:
+            return prs
+        after = page['pageInfo']['endCursor']
+
 pr_by_ticket = {}  # (issue_repo, issue_number) -> open pr dict
 handled_tickets = set()  # (issue_repo, issue_number) with any open or merged PR
 for pr_repo in PR_REPOS:
-    resp = gh_graphql(PR_QUERY, {'owner': ORG, 'repo': pr_repo})
-    prs = resp['data']['repository']['pullRequests']['nodes']
+    prs = fetch_prs(pr_repo)
     for pr in prs:
         pr['_repo'] = pr_repo
         pr['_reviewers'] = pending_reviewers(pr)
@@ -176,7 +195,7 @@ for key, ticket in tickets.items():
         emergency = ' &#128680;' if days > 15 else ''
         reviewed_rows.append({
             'issue': issue_cell,
-            'assignees': ', '.join(ticket['assignees']),
+            'opened_by': pr['author']['login'] if pr['author'] else 'unknown',
             'reviewers': pr['_reviewers'],
             'pr': f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>',
             'days': str(days),
@@ -206,8 +225,8 @@ for r in reviewed_rows:
 reviewer_sections = ''.join(
     f'<h3>Needs review from {reviewer} ({len(rows_by_reviewer[reviewer])})</h3>'
     + html_table(
-        [[r['issue'], r['assignees'], r['pr'], r['days'], r['light']] for r in rows_by_reviewer[reviewer]],
-        ['Issue', 'Assignee', 'PR', 'Days Since Review Raised', 'Status'],
+        [[r['issue'], r['opened_by'], r['pr'], r['days'], r['light']] for r in rows_by_reviewer[reviewer]],
+        ['Issue', 'Opened By', 'PR', 'Days Since Review Raised', 'Status'],
     )
     for reviewer in sorted(rows_by_reviewer, key=str.lower)
 )
