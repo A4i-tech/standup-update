@@ -246,7 +246,7 @@ reviewer_sections = ''.join(
 )
 
 draft_section = (
-    f'<h3>Draft PRs - excluded from tracking ({len(draft_rows)})</h3>'
+    f'<h3>Draft PRs ({len(draft_rows)})</h3>'
     + html_table(
         [[r['issue'], r['pr'], r['author']] for r in draft_rows],
         ['Issue', 'PR', 'Author'],
