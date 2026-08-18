@@ -115,7 +115,7 @@ query($owner: String!, $repo: String!, $after: String) {
     pullRequests(states: [OPEN, MERGED], first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number title url createdAt state
+        number title url createdAt state isDraft
         author { login }
         closingIssuesReferences(first: 10) {
           nodes { number repository { name } }
@@ -151,6 +151,8 @@ handled_tickets = set()  # (issue_repo, issue_number) with any open or merged PR
 for pr_repo in PR_REPOS:
     prs = fetch_prs(pr_repo)
     for pr in prs:
+        if pr['isDraft']:  # not ready for review; treat as if it doesn't exist
+            continue
         pr['_repo'] = pr_repo
         pr['_reviewers'] = pending_reviewers(pr)
         for closed_issue in pr['closingIssuesReferences']['nodes']:
