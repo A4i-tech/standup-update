@@ -147,13 +147,18 @@ def fetch_prs(pr_repo):
         after = page['pageInfo']['endCursor']
 
 pr_by_ticket = {}  # (issue_repo, issue_number) -> open pr dict
+draft_by_ticket = {}  # (issue_repo, issue_number) -> draft pr dict
 handled_tickets = set()  # (issue_repo, issue_number) with any open or merged PR
 for pr_repo in PR_REPOS:
     prs = fetch_prs(pr_repo)
     for pr in prs:
-        if pr['isDraft']:  # not ready for review; treat as if it doesn't exist
-            continue
         pr['_repo'] = pr_repo
+        if pr['isDraft']:  # not ready for review; keep separate from "no PR yet"
+            for closed_issue in pr['closingIssuesReferences']['nodes']:
+                key = (closed_issue['repository']['name'], closed_issue['number'])
+                if key in tickets and key not in draft_by_ticket:
+                    draft_by_ticket[key] = pr
+            continue
         pr['_reviewers'] = pending_reviewers(pr)
         for closed_issue in pr['closingIssuesReferences']['nodes']:
             key = (closed_issue['repository']['name'], closed_issue['number'])
@@ -186,7 +191,7 @@ def pill(color, label):
         f'padding:2px 8px;border-radius:10px;white-space:nowrap">{label}</span>'
     )
 
-reviewed_rows, no_pr_rows = [], []
+reviewed_rows, no_pr_rows, draft_rows = [], [], []
 for key, ticket in tickets.items():
     repo, issue_num = key
     pr = pr_by_ticket.get(key)
@@ -202,6 +207,13 @@ for key, ticket in tickets.items():
             'pr': f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>',
             'days': str(days),
             'light': f'{pill(color, label)}{emergency}',
+        })
+    elif key in draft_by_ticket:
+        draft_pr = draft_by_ticket[key]
+        draft_rows.append({
+            'issue': issue_cell,
+            'pr': f'<a href="{draft_pr["url"]}">{draft_pr["_repo"]}#{draft_pr["number"]}</a>',
+            'author': draft_pr['author']['login'] if draft_pr['author'] else 'unknown',
         })
     elif key not in handled_tickets:
         no_pr_rows.append({
@@ -233,6 +245,14 @@ reviewer_sections = ''.join(
     for reviewer in sorted(rows_by_reviewer, key=str.lower)
 )
 
+draft_section = (
+    f'<h3>Draft PRs - excluded from tracking ({len(draft_rows)})</h3>'
+    + html_table(
+        [[r['issue'], r['pr'], r['author']] for r in draft_rows],
+        ['Issue', 'PR', 'Author'],
+    )
+)
+
 no_pr_section = (
     f'<h3>No PR Yet ({len(no_pr_rows)})</h3>'
     + html_table(
@@ -255,6 +275,7 @@ html = f"""
 {legend}
 <h2>Pending Reviews (by Reviewer)</h2>
 {reviewer_sections}
+{draft_section}
 {no_pr_section}
 """
 
