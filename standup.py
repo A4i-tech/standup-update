@@ -253,12 +253,10 @@ draft_section = (
     )
 )
 
+PROJECT_BOARD_URL = f'https://github.com/orgs/{ORG}/projects/1/views/2'
 no_pr_section = (
     f'<h3>No PR Yet ({len(no_pr_rows)})</h3>'
-    + html_table(
-        [[r['issue'], r['assignees']] for r in no_pr_rows],
-        ['Issue', 'Assignee'],
-    )
+    f'<p style="font-size:13px"><a href="{PROJECT_BOARD_URL}">View the full list on the project board</a></p>'
 )
 
 legend = f"""
