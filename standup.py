@@ -115,7 +115,7 @@ query($owner: String!, $repo: String!, $after: String) {
     pullRequests(states: [OPEN, MERGED], first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number title url createdAt state isDraft
+        number title url createdAt state isDraft mergeable
         author { login }
         closingIssuesReferences(first: 10) {
           nodes { number repository { name } }
@@ -191,7 +191,7 @@ def pill(color, label):
         f'padding:2px 8px;border-radius:10px;white-space:nowrap">{label}</span>'
     )
 
-reviewed_rows, no_pr_rows, draft_rows = [], [], []
+reviewed_rows, no_pr_rows, draft_rows, conflict_rows = [], [], [], []
 for key, ticket in tickets.items():
     repo, issue_num = key
     pr = pr_by_ticket.get(key)
@@ -200,14 +200,24 @@ for key, ticket in tickets.items():
         days = days_since(review_raised_at(pr['_repo'], pr))
         color, label = traffic_light(days)
         emergency = ' &#128680;' if days > 15 else ''
-        reviewed_rows.append({
-            'issue': issue_cell,
-            'opened_by': pr['author']['login'] if pr['author'] else 'unknown',
-            'reviewers': pr['_reviewers'],
-            'pr': f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>',
-            'days': str(days),
-            'light': f'{pill(color, label)}{emergency}',
-        })
+        pr_cell = f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>'
+        opened_by = pr['author']['login'] if pr['author'] else 'unknown'
+        if pr['mergeable'] == 'CONFLICTING':
+            conflict_rows.append({
+                'issue': issue_cell,
+                'opened_by': opened_by,
+                'pr': pr_cell,
+                'days': str(days),
+            })
+        else:
+            reviewed_rows.append({
+                'issue': issue_cell,
+                'opened_by': opened_by,
+                'reviewers': pr['_reviewers'],
+                'pr': pr_cell,
+                'days': str(days),
+                'light': f'{pill(color, label)}{emergency}',
+            })
     elif key in draft_by_ticket:
         draft_pr = draft_by_ticket[key]
         draft_rows.append({
@@ -245,6 +255,14 @@ reviewer_sections = ''.join(
     for reviewer in sorted(rows_by_reviewer, key=str.lower)
 )
 
+conflict_section = (
+    f'<h3>Merge Conflicts ({len(conflict_rows)})</h3>'
+    + html_table(
+        [[r['issue'], r['opened_by'], r['pr'], r['days']] for r in conflict_rows],
+        ['Issue', 'Opened By', 'PR', 'Days Since Review Raised'],
+    )
+)
+
 draft_section = (
     f'<h3>Draft PRs ({len(draft_rows)})</h3>'
     + html_table(
@@ -273,6 +291,7 @@ html = f"""
 {legend}
 <h2>Pending Reviews (by Reviewer)</h2>
 {reviewer_sections}
+{conflict_section}
 {draft_section}
 {no_pr_section}
 """
