@@ -13,7 +13,7 @@ MAIL_FROM_ADDRESS = os.environ['MAIL_FROM_ADDRESS']
 TEAMS_EMAIL = os.environ['TEAMS_EMAIL']
 TARGET_USER = 'farmanahmed888'
 ORG = 'A4i-tech'
-PR_REPOS = ['byoeb', 'SEEDS', 'Shiksha-Copilot']
+PR_REPOS = ['byoeb', 'SEEDS', 'Shiksha-Copilot', 'infra-ops', 'OmniIngest', 'ai-ops']
 BOT_LOGINS = {'a4i-architect'}
 
 ACTIVE_STATUSES = {'Todo', 'In Development', 'Awaiting Review', 'Awaiting Release'}
