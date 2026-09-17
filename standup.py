@@ -232,14 +232,11 @@ for key, ticket in tickets.items():
         })
 
 def html_table(rows, columns):
-    th = ''.join(
-        f'<th style="border:1px solid #ddd;padding:6px;background:#2d2d2d;color:#fff">{c}</th>'
-        for c in columns
-    )
+    th = ''.join(f'<th>{c}</th>' for c in columns)
     rows_html = ''
     for r in rows:
-        rows_html += '<tr>' + ''.join(f'<td style="border:1px solid #ddd;padding:6px">{c}</td>' for c in r) + '</tr>'
-    return f'<table style="border-collapse:collapse;width:100%"><tr>{th}</tr>{rows_html}</table>'
+        rows_html += '<tr>' + ''.join(f'<td>{c}</td>' for c in r) + '</tr>'
+    return f'<table class="rpt"><tr>{th}</tr>{rows_html}</table>'
 
 rows_by_reviewer = {}
 for r in reviewed_rows:
@@ -288,6 +285,11 @@ legend = f"""
 """
 
 html = f"""
+<style>
+table.rpt {{border-collapse:collapse;width:100%}}
+table.rpt th {{border:1px solid #ddd;padding:6px;background:#2d2d2d;color:#fff}}
+table.rpt td {{border:1px solid #ddd;padding:6px}}
+</style>
 {legend}
 <h2>Pending Reviews (by Reviewer)</h2>
 {reviewer_sections}
