@@ -215,8 +215,7 @@ for key, ticket in tickets.items():
                 'opened_by': opened_by,
                 'reviewers': pr['_reviewers'],
                 'pr': pr_cell,
-                'days': str(days),
-                'light': f'{pill(color, label)}{emergency}',
+                'light': f'{pill(color, f"{label} ({days}d)")}{emergency}',
             })
     elif key in draft_by_ticket:
         draft_pr = draft_by_ticket[key]
@@ -246,8 +245,8 @@ for r in reviewed_rows:
 reviewer_sections = ''.join(
     f'<h3>Needs review from {reviewer} ({len(rows_by_reviewer[reviewer])})</h3>'
     + html_table(
-        [[r['issue'], r['opened_by'], r['pr'], r['days'], r['light']] for r in rows_by_reviewer[reviewer]],
-        ['Issue', 'Opened By', 'PR', 'Days Since Review Raised', 'Status'],
+        [[r['issue'], r['opened_by'], r['pr'], r['light']] for r in rows_by_reviewer[reviewer]],
+        ['Issue', 'Opened By', 'PR', 'Status'],
     )
     for reviewer in sorted(rows_by_reviewer, key=str.lower)
 )
