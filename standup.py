@@ -1,16 +1,7 @@
-import json, urllib.request, smtplib, os
+import json, urllib.request, os
 from datetime import datetime, timezone
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
 
 GITHUB_TOKEN = os.environ['GH_PROJECT_TOKEN']
-SMTP_HOST = os.environ['SMTP_HOST']
-SMTP_PORT = int(os.environ['SMTP_PORT'])
-SMTP_SECURE = os.environ['SMTP_SECURE'].lower() == 'true'
-SMTP_USERNAME = os.environ['SMTP_USERNAME']
-SMTP_PASSWORD = os.environ['SMTP_PASSWORD']
-MAIL_FROM_ADDRESS = os.environ['MAIL_FROM_ADDRESS']
-TEAMS_EMAIL = os.environ['TEAMS_EMAIL']
 POWER_AUTOMATE_URL = os.environ['POWER_AUTOMATE_URL']
 TARGET_USER = 'farmanahmed888'
 ORG = 'A4i-tech'
@@ -181,148 +172,44 @@ def days_since(iso_ts):
 
 def traffic_light(days):
     if days <= 2:
-        return '#2e7d32', 'Green'
+        return '🟢'
     if days <= 5:
-        return '#b8860b', 'Yellow'
-    return '#c62828', 'Red'
-
-LIGHT_EMOJI = {'Green': '🟢', 'Yellow': '🟡', 'Red': '🔴'}
-
-def pill(color, label):
-    return (
-        f'<span style="background:{color};color:#fff;font-weight:bold;'
-        f'padding:2px 8px;border-radius:10px;white-space:nowrap">{label}</span>'
-    )
+        return '🟡'
+    return '🔴'
 
 reviewed_rows, no_pr_rows, draft_rows, conflict_rows = [], [], [], []
 for key, ticket in tickets.items():
     repo, issue_num = key
     pr = pr_by_ticket.get(key)
-    issue_cell = f'<a href="{ticket["url"]}">{repo}#{issue_num}</a> {ticket["title"]}'
     issue_md = f'[{repo}#{issue_num}]({ticket["url"]}) {ticket["title"]}'
     if pr:
         days = days_since(review_raised_at(pr['_repo'], pr))
-        color, label = traffic_light(days)
-        emergency = ' &#128680;' if days > 15 else ''
-        emergency_md = ' 🚨' if days > 15 else ''
-        pr_cell = f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>'
         pr_md = f'[{pr["_repo"]}#{pr["number"]}]({pr["url"]})'
         opened_by = pr['author']['login'] if pr['author'] else 'unknown'
         if pr['mergeable'] == 'CONFLICTING':
-            conflict_rows.append({
-                'issue': issue_cell,
-                'opened_by': opened_by,
-                'pr': pr_cell,
-                'days': str(days),
-                'card': [issue_md, opened_by, pr_md, f'{days}d'],
-            })
+            conflict_rows.append([issue_md, opened_by, pr_md, f'{days}d'])
         else:
+            emergency = ' 🚨' if days > 15 else ''
             reviewed_rows.append({
-                'issue': issue_cell,
-                'opened_by': opened_by,
                 'reviewers': pr['_reviewers'],
-                'pr': pr_cell,
-                'light': f'{pill(color, f"{label} ({days}d)")}{emergency}',
-                'card': [issue_md, opened_by, pr_md, f'{LIGHT_EMOJI[label]} {days}d{emergency_md}'],
+                'card': [issue_md, opened_by, pr_md, f'{traffic_light(days)} {days}d{emergency}'],
             })
     elif key in draft_by_ticket:
         draft_pr = draft_by_ticket[key]
-        draft_rows.append({
-            'issue': issue_cell,
-            'pr': f'<a href="{draft_pr["url"]}">{draft_pr["_repo"]}#{draft_pr["number"]}</a>',
-            'author': draft_pr['author']['login'] if draft_pr['author'] else 'unknown',
-            'card': [
-                issue_md,
-                f'[{draft_pr["_repo"]}#{draft_pr["number"]}]({draft_pr["url"]})',
-                draft_pr['author']['login'] if draft_pr['author'] else 'unknown',
-            ],
-        })
+        draft_rows.append([
+            issue_md,
+            f'[{draft_pr["_repo"]}#{draft_pr["number"]}]({draft_pr["url"]})',
+            draft_pr['author']['login'] if draft_pr['author'] else 'unknown',
+        ])
     elif key not in handled_tickets:
-        no_pr_rows.append({
-            'issue': issue_cell,
-            'assignees': ', '.join(ticket['assignees']),
-        })
-
-def html_table(rows, columns):
-    th = ''.join(f'<th>{c}</th>' for c in columns)
-    rows_html = ''
-    for r in rows:
-        rows_html += '<tr>' + ''.join(f'<td>{c}</td>' for c in r) + '</tr>'
-    return f'<table class="rpt"><tr>{th}</tr>{rows_html}</table>'
+        no_pr_rows.append(key)
 
 rows_by_reviewer = {}
 for r in reviewed_rows:
     for reviewer in r['reviewers']:
         rows_by_reviewer.setdefault(reviewer, []).append(r)
 
-reviewer_sections = ''.join(
-    f'<h3>Needs review from {reviewer} ({len(rows_by_reviewer[reviewer])})</h3>'
-    + html_table(
-        [[r['issue'], r['opened_by'], r['pr'], r['light']] for r in rows_by_reviewer[reviewer]],
-        ['Issue', 'Opened By', 'PR', 'Status'],
-    )
-    for reviewer in sorted(rows_by_reviewer, key=str.lower)
-)
-
-conflict_section = (
-    f'<h3>Merge Conflicts ({len(conflict_rows)})</h3>'
-    + html_table(
-        [[r['issue'], r['opened_by'], r['pr'], r['days']] for r in conflict_rows],
-        ['Issue', 'Opened By', 'PR', 'Days Since Review Raised'],
-    )
-)
-
-draft_section = (
-    f'<h3>Draft PRs ({len(draft_rows)})</h3>'
-    + html_table(
-        [[r['issue'], r['pr'], r['author']] for r in draft_rows],
-        ['Issue', 'PR', 'Author'],
-    )
-)
-
 PROJECT_BOARD_URL = f'https://github.com/orgs/{ORG}/projects/1/views/2'
-no_pr_section = (
-    f'<h3>No PR Yet ({len(no_pr_rows)})</h3>'
-    f'<p style="font-size:13px"><a href="{PROJECT_BOARD_URL}">View the full list on the project board</a></p>'
-)
-
-legend = f"""
-<p style="font-size:13px">
-  <b>Legend:</b>
-  {pill('#2e7d32', 'Green')} 0-2 days &middot;
-  {pill('#b8860b', 'Yellow')} 3-5 days &middot;
-  {pill('#c62828', 'Red')} 6+ days &middot;
-  &#128680; = 15+ days
-</p>
-"""
-
-html = f"""
-<style>
-table.rpt {{border-collapse:collapse;width:100%}}
-table.rpt th {{border:1px solid #ddd;padding:6px;background:#2d2d2d;color:#fff}}
-table.rpt td {{border:1px solid #ddd;padding:6px}}
-</style>
-{legend}
-<h2>Pending Reviews (by Reviewer)</h2>
-{reviewer_sections}
-{conflict_section}
-{draft_section}
-{no_pr_section}
-"""
-
-msg = MIMEMultipart('alternative')
-msg['Subject'] = 'Daily Standup - GitHub Tasks'
-msg['From'] = MAIL_FROM_ADDRESS
-msg['To'] = TEAMS_EMAIL
-msg.attach(MIMEText(html, 'html'))
-
-smtp_cls = smtplib.SMTP_SSL if SMTP_SECURE else smtplib.SMTP
-with smtp_cls(SMTP_HOST, SMTP_PORT) as s:
-    if not SMTP_SECURE:
-        s.starttls()
-    s.login(SMTP_USERNAME, SMTP_PASSWORD)
-    s.sendmail(MAIL_FROM_ADDRESS, TEAMS_EMAIL, msg.as_string())
-    print('Email sent to Teams channel')
 
 def card_table(rows, columns, widths):
     def cell(text, bold=False):
@@ -350,12 +237,12 @@ for reviewer in sorted(rows_by_reviewer, key=str.lower):
 if conflict_rows:
     card_body += [
         card_heading(f'Merge Conflicts ({len(conflict_rows)})'),
-        card_table([r['card'] for r in conflict_rows], ['Issue', 'Opened By', 'PR', 'Days'], [4, 2, 3, 1]),
+        card_table(conflict_rows, ['Issue', 'Opened By', 'PR', 'Days'], [4, 2, 3, 1]),
     ]
 if draft_rows:
     card_body += [
         card_heading(f'Draft PRs ({len(draft_rows)})'),
-        card_table([r['card'] for r in draft_rows], ['Issue', 'PR', 'Author'], [4, 3, 2]),
+        card_table(draft_rows, ['Issue', 'PR', 'Author'], [4, 3, 2]),
     ]
 card_body.append(card_heading(f'No PR Yet ({len(no_pr_rows)})'))
 card_body.append({'type': 'TextBlock', 'text': f'[View the full list on the project board]({PROJECT_BOARD_URL})'})
