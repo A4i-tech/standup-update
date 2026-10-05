@@ -186,6 +186,8 @@ def traffic_light(days):
         return '#b8860b', 'Yellow'
     return '#c62828', 'Red'
 
+LIGHT_EMOJI = {'Green': '🟢', 'Yellow': '🟡', 'Red': '🔴'}
+
 def pill(color, label):
     return (
         f'<span style="background:{color};color:#fff;font-weight:bold;'
@@ -197,11 +199,14 @@ for key, ticket in tickets.items():
     repo, issue_num = key
     pr = pr_by_ticket.get(key)
     issue_cell = f'<a href="{ticket["url"]}">{repo}#{issue_num}</a> {ticket["title"]}'
+    issue_md = f'[{repo}#{issue_num}]({ticket["url"]}) {ticket["title"]}'
     if pr:
         days = days_since(review_raised_at(pr['_repo'], pr))
         color, label = traffic_light(days)
         emergency = ' &#128680;' if days > 15 else ''
+        emergency_md = ' 🚨' if days > 15 else ''
         pr_cell = f'<a href="{pr["url"]}">{pr["_repo"]}#{pr["number"]}</a>'
+        pr_md = f'[{pr["_repo"]}#{pr["number"]}]({pr["url"]})'
         opened_by = pr['author']['login'] if pr['author'] else 'unknown'
         if pr['mergeable'] == 'CONFLICTING':
             conflict_rows.append({
@@ -209,6 +214,7 @@ for key, ticket in tickets.items():
                 'opened_by': opened_by,
                 'pr': pr_cell,
                 'days': str(days),
+                'card': [issue_md, opened_by, pr_md, f'{days}d'],
             })
         else:
             reviewed_rows.append({
@@ -217,6 +223,7 @@ for key, ticket in tickets.items():
                 'reviewers': pr['_reviewers'],
                 'pr': pr_cell,
                 'light': f'{pill(color, f"{label} ({days}d)")}{emergency}',
+                'card': [issue_md, opened_by, pr_md, f'{LIGHT_EMOJI[label]} {days}d{emergency_md}'],
             })
     elif key in draft_by_ticket:
         draft_pr = draft_by_ticket[key]
@@ -224,6 +231,11 @@ for key, ticket in tickets.items():
             'issue': issue_cell,
             'pr': f'<a href="{draft_pr["url"]}">{draft_pr["_repo"]}#{draft_pr["number"]}</a>',
             'author': draft_pr['author']['login'] if draft_pr['author'] else 'unknown',
+            'card': [
+                issue_md,
+                f'[{draft_pr["_repo"]}#{draft_pr["number"]}]({draft_pr["url"]})',
+                draft_pr['author']['login'] if draft_pr['author'] else 'unknown',
+            ],
         })
     elif key not in handled_tickets:
         no_pr_rows.append({
@@ -312,9 +324,60 @@ with smtp_cls(SMTP_HOST, SMTP_PORT) as s:
     s.sendmail(MAIL_FROM_ADDRESS, TEAMS_EMAIL, msg.as_string())
     print('Email sent to Teams channel')
 
+def card_table(rows, columns, widths):
+    def cell(text, bold=False):
+        return {'type': 'TableCell', 'items': [{'type': 'TextBlock', 'text': text, 'wrap': True, 'weight': 'Bolder' if bold else 'Default'}]}
+    return {
+        'type': 'Table',
+        'firstRowAsHeaders': True,
+        'columns': [{'width': w} for w in widths],
+        'rows': [{'type': 'TableRow', 'cells': [cell(c, True) for c in columns]}]
+        + [{'type': 'TableRow', 'cells': [cell(c) for c in r]} for r in rows],
+    }
+
+def card_heading(text):
+    return {'type': 'TextBlock', 'text': text, 'weight': 'Bolder', 'size': 'Medium', 'separator': True}
+
+card_body = [
+    {'type': 'TextBlock', 'text': 'Daily Standup - GitHub Tasks', 'weight': 'Bolder', 'size': 'Large'},
+    {'type': 'TextBlock', 'text': '🟢 0-2 days · 🟡 3-5 days · 🔴 6+ days · 🚨 15+ days', 'wrap': True},
+]
+for reviewer in sorted(rows_by_reviewer, key=str.lower):
+    card_body += [
+        card_heading(f'Needs review from {reviewer} ({len(rows_by_reviewer[reviewer])})'),
+        card_table([r['card'] for r in rows_by_reviewer[reviewer]], ['Issue', 'Opened By', 'PR', 'Status'], [4, 2, 3, 2]),
+    ]
+if conflict_rows:
+    card_body += [
+        card_heading(f'Merge Conflicts ({len(conflict_rows)})'),
+        card_table([r['card'] for r in conflict_rows], ['Issue', 'Opened By', 'PR', 'Days'], [4, 2, 3, 1]),
+    ]
+if draft_rows:
+    card_body += [
+        card_heading(f'Draft PRs ({len(draft_rows)})'),
+        card_table([r['card'] for r in draft_rows], ['Issue', 'PR', 'Author'], [4, 3, 2]),
+    ]
+card_body.append(card_heading(f'No PR Yet ({len(no_pr_rows)})'))
+card_body.append({'type': 'TextBlock', 'text': f'[View the full list on the project board]({PROJECT_BOARD_URL})'})
+
+card_payload = {
+    'type': 'message',
+    'attachments': [{
+        'contentType': 'application/vnd.microsoft.card.adaptive',
+        'contentUrl': None,
+        'content': {
+            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+            'type': 'AdaptiveCard',
+            'version': '1.5',
+            'msteams': {'width': 'Full'},
+            'body': card_body,
+        },
+    }],
+}
+
 flow_req = urllib.request.Request(
     POWER_AUTOMATE_URL,
-    data=json.dumps({'html': html}).encode(),
+    data=json.dumps(card_payload, separators=(',', ':')).encode(),
     headers={'Content-Type': 'application/json'}
 )
 with urllib.request.urlopen(flow_req) as resp:
