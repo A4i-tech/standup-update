@@ -11,6 +11,7 @@ SMTP_USERNAME = os.environ['SMTP_USERNAME']
 SMTP_PASSWORD = os.environ['SMTP_PASSWORD']
 MAIL_FROM_ADDRESS = os.environ['MAIL_FROM_ADDRESS']
 TEAMS_EMAIL = os.environ['TEAMS_EMAIL']
+POWER_AUTOMATE_URL = os.environ['POWER_AUTOMATE_URL']
 TARGET_USER = 'farmanahmed888'
 ORG = 'A4i-tech'
 PR_REPOS = ['byoeb', 'SEEDS', 'Shiksha-Copilot', 'infra-ops', 'OmniIngest', 'ai-ops']
@@ -310,3 +311,11 @@ with smtp_cls(SMTP_HOST, SMTP_PORT) as s:
     s.login(SMTP_USERNAME, SMTP_PASSWORD)
     s.sendmail(MAIL_FROM_ADDRESS, TEAMS_EMAIL, msg.as_string())
     print('Email sent to Teams channel')
+
+flow_req = urllib.request.Request(
+    POWER_AUTOMATE_URL,
+    data=json.dumps({'html': html}).encode(),
+    headers={'Content-Type': 'application/json'}
+)
+with urllib.request.urlopen(flow_req) as resp:
+    print(f'Power Automate flow triggered: {resp.status}')
