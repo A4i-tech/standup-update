@@ -1,5 +1,5 @@
 import json, urllib.request, os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 GITHUB_TOKEN = os.environ['GH_PROJECT_TOKEN']
 POWER_AUTOMATE_URL = os.environ['POWER_AUTOMATE_URL']
@@ -167,8 +167,9 @@ def review_raised_at(repo, pr):
     return min(requested) if requested else pr['createdAt']
 
 def days_since(iso_ts):
-    dt = datetime.strptime(iso_ts, '%Y-%m-%dT%H:%M:%SZ').replace(tzinfo=timezone.utc)
-    return (datetime.now(timezone.utc) - dt).days
+    start = datetime.strptime(iso_ts, '%Y-%m-%dT%H:%M:%SZ').date()
+    elapsed = (datetime.now(timezone.utc).date() - start).days
+    return sum((start + timedelta(days=i)).weekday() < 5 for i in range(elapsed))
 
 def traffic_light(days):
     if days <= 2:
