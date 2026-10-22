@@ -140,7 +140,6 @@ def fetch_prs(pr_repo):
 
 pr_by_ticket = {}  # (issue_repo, issue_number) -> open pr dict
 draft_by_ticket = {}  # (issue_repo, issue_number) -> draft pr dict
-handled_tickets = set()  # (issue_repo, issue_number) with any open or merged PR
 for pr_repo in PR_REPOS:
     prs = fetch_prs(pr_repo)
     for pr in prs:
@@ -156,7 +155,6 @@ for pr_repo in PR_REPOS:
             key = (closed_issue['repository']['name'], closed_issue['number'])
             if key not in tickets:
                 continue
-            handled_tickets.add(key)
             if pr['state'] == 'OPEN' and key not in pr_by_ticket:
                 pr_by_ticket[key] = pr
 
@@ -178,11 +176,22 @@ def traffic_light(days):
         return '🟡'
     return '🔴'
 
-reviewed_rows, no_pr_rows, draft_rows, conflict_rows = [], [], [], []
+MAX_ISSUE_TEXT = 100  # visible chars of "repo#num title" in a card cell
+
+def middle_ellipsis(text, limit):
+    if len(text) <= limit:
+        return text
+    keep = max(limit - 1, 2)
+    head = (keep + 1) // 2
+    return text[:head].rstrip() + '…' + text[len(text) - (keep - head):].lstrip()
+
+reviewed_rows, draft_rows, conflict_rows = [], [], []
 for key, ticket in tickets.items():
     repo, issue_num = key
     pr = pr_by_ticket.get(key)
-    issue_md = f'[{repo}#{issue_num}]({ticket["url"]}) {ticket["title"]}'
+    prefix = f'{repo}#{issue_num}'
+    title = middle_ellipsis(ticket['title'], MAX_ISSUE_TEXT - len(prefix) - 1)
+    issue_md = f'[{prefix}]({ticket["url"]}) {title}'
     if pr:
         days = days_since(review_raised_at(pr['_repo'], pr))
         pr_md = f'[{pr["_repo"]}#{pr["number"]}]({pr["url"]})'
@@ -202,8 +211,6 @@ for key, ticket in tickets.items():
             f'[{draft_pr["_repo"]}#{draft_pr["number"]}]({draft_pr["url"]})',
             draft_pr['author']['login'] if draft_pr['author'] else 'unknown',
         ])
-    elif key not in handled_tickets:
-        no_pr_rows.append(key)
 
 rows_by_reviewer = {}
 for r in reviewed_rows:
@@ -226,47 +233,57 @@ def card_table(rows, columns, widths):
 def card_heading(text):
     return {'type': 'TextBlock', 'text': text, 'weight': 'Bolder', 'size': 'Medium', 'separator': True}
 
-card_body = [
-    {'type': 'TextBlock', 'text': 'Daily Standup - GitHub Tasks', 'weight': 'Bolder', 'size': 'Large'},
-    {'type': 'TextBlock', 'text': '🟢 0-2 days · 🟡 3-5 days · 🔴 6+ days · 🚨 15+ days', 'wrap': True},
-]
-for reviewer in sorted(rows_by_reviewer, key=str.lower):
-    card_body += [
-        card_heading(f'Needs review from {reviewer} ({len(rows_by_reviewer[reviewer])})'),
-        card_table([r['card'] for r in rows_by_reviewer[reviewer]], ['Issue', 'Opened By', 'PR', 'Status'], [4, 2, 3, 2]),
-    ]
+# Teams rejects messages over ~28 KB (RequestEntityTooLarge), so the report is
+# split across several cards, each kept under CARD_LIMIT bytes.
+CARD_LIMIT = 20000
+MAX_ROWS = 20
+
+LEGEND = '🟢 0-2 days · 🟡 3-5 days · 🔴 6+ days · 🚨 15+ days'
+
+def payload(body):
+    return json.dumps({
+        'type': 'message',
+        'attachments': [{
+            'contentType': 'application/vnd.microsoft.card.adaptive',
+            'content': {
+                '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+                'type': 'AdaptiveCard',
+                'version': '1.5',
+                'msteams': {'width': 'Full'},
+                'body': body,
+            },
+        }],
+    }, separators=(',', ':')).encode()
+
+sections = [(f'Needs review from {reviewer} ({len(rows_by_reviewer[reviewer])})',
+             ['Issue', 'Opened By', 'PR', 'Status'], [4, 2, 3, 2],
+             [r['card'] for r in rows_by_reviewer[reviewer]])
+            for reviewer in sorted(rows_by_reviewer, key=str.lower)]
 if conflict_rows:
-    card_body += [
-        card_heading(f'Merge Conflicts ({len(conflict_rows)})'),
-        card_table(conflict_rows, ['Issue', 'Opened By', 'PR', 'Days'], [4, 2, 3, 1]),
-    ]
+    sections.append((f'Merge Conflicts ({len(conflict_rows)})',
+                     ['Issue', 'Opened By', 'PR', 'Days'], [4, 2, 3, 1], conflict_rows))
 if draft_rows:
-    card_body += [
-        card_heading(f'Draft PRs ({len(draft_rows)})'),
-        card_table(draft_rows, ['Issue', 'PR', 'Author'], [4, 3, 2]),
+    sections.append((f'Draft PRs ({len(draft_rows)})',
+                     ['Issue', 'PR', 'Author'], [4, 3, 2], draft_rows))
+
+blocks = [[card_heading(heading + (' (cont.)' if i else '')), card_table(rows[i:i + MAX_ROWS], columns, widths)]
+          for heading, columns, widths, rows in sections
+          for i in range(0, len(rows), MAX_ROWS)]
+
+bodies = [[]]
+for block in blocks:
+    if bodies[-1] and len(payload(bodies[-1] + block)) > CARD_LIMIT:
+        bodies.append([])
+    bodies[-1] += block
+
+footer = {'type': 'TextBlock', 'text': f'[View the full list on the project board]({PROJECT_BOARD_URL})'}
+for n, body in enumerate(bodies, 1):
+    part = f' ({n}/{len(bodies)})' if len(bodies) > 1 else ''
+    header = [
+        {'type': 'TextBlock', 'text': 'Daily Standup - GitHub Tasks' + part, 'weight': 'Bolder', 'size': 'Large'},
+        {'type': 'TextBlock', 'text': LEGEND, 'wrap': True},
     ]
-card_body.append(card_heading(f'No PR Yet ({len(no_pr_rows)})'))
-card_body.append({'type': 'TextBlock', 'text': f'[View the full list on the project board]({PROJECT_BOARD_URL})'})
-
-card_payload = {
-    'type': 'message',
-    'attachments': [{
-        'contentType': 'application/vnd.microsoft.card.adaptive',
-        'contentUrl': None,
-        'content': {
-            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-            'type': 'AdaptiveCard',
-            'version': '1.5',
-            'msteams': {'width': 'Full'},
-            'body': card_body,
-        },
-    }],
-}
-
-flow_req = urllib.request.Request(
-    POWER_AUTOMATE_URL,
-    data=json.dumps(card_payload, separators=(',', ':')).encode(),
-    headers={'Content-Type': 'application/json'}
-)
-with urllib.request.urlopen(flow_req) as resp:
-    print(f'Power Automate flow triggered: {resp.status}')
+    urllib.request.urlopen(urllib.request.Request(
+        POWER_AUTOMATE_URL, data=payload(header + body + [footer]),
+        headers={'Content-Type': 'application/json'},
+    )).close()
