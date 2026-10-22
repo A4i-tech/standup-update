@@ -234,8 +234,7 @@ def card_heading(text):
     return {'type': 'TextBlock', 'text': text, 'weight': 'Bolder', 'size': 'Medium', 'separator': True}
 
 # Teams rejects messages over ~28 KB (RequestEntityTooLarge), so the report is
-# split across several cards, each kept under CARD_LIMIT bytes.
-CARD_LIMIT = 20000
+# split across several cards; MAX_ROWS keeps each well under that.
 MAX_ROWS = 20
 
 LEGEND = '🟢 0-2 days · 🟡 3-5 days · 🔴 6+ days · 🚨 15+ days'
@@ -266,24 +265,19 @@ if draft_rows:
     sections.append((f'Draft PRs ({len(draft_rows)})',
                      ['Issue', 'PR', 'Author'], [4, 3, 2], draft_rows))
 
-blocks = [[card_heading(heading + (' (cont.)' if i else '')), card_table(rows[i:i + MAX_ROWS], columns, widths)]
+# One card per section (per reviewer, conflicts, drafts); long sections continue on further cards.
+bodies = [[card_heading(heading + (' (cont.)' if i else '')), card_table(rows[i:i + MAX_ROWS], columns, widths)]
           for heading, columns, widths, rows in sections
           for i in range(0, len(rows), MAX_ROWS)]
 
-bodies = [[]]
-for block in blocks:
-    if bodies[-1] and len(payload(bodies[-1] + block)) > CARD_LIMIT:
-        bodies.append([])
-    bodies[-1] += block
+bodies[0] = [
+    {'type': 'TextBlock', 'text': 'Daily Standup - GitHub Tasks', 'weight': 'Bolder', 'size': 'Large'},
+    {'type': 'TextBlock', 'text': LEGEND, 'wrap': True},
+] + bodies[0]
+bodies[-1].append({'type': 'TextBlock', 'text': f'[View the full list on the project board]({PROJECT_BOARD_URL})'})
 
-footer = {'type': 'TextBlock', 'text': f'[View the full list on the project board]({PROJECT_BOARD_URL})'}
-for n, body in enumerate(bodies, 1):
-    part = f' ({n}/{len(bodies)})' if len(bodies) > 1 else ''
-    header = [
-        {'type': 'TextBlock', 'text': 'Daily Standup - GitHub Tasks' + part, 'weight': 'Bolder', 'size': 'Large'},
-        {'type': 'TextBlock', 'text': LEGEND, 'wrap': True},
-    ]
+for body in bodies:
     urllib.request.urlopen(urllib.request.Request(
-        POWER_AUTOMATE_URL, data=payload(header + body + [footer]),
+        POWER_AUTOMATE_URL, data=payload(body),
         headers={'Content-Type': 'application/json'},
     )).close()
