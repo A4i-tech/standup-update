@@ -1,9 +1,8 @@
-import json, urllib.request, os
+import html, json, os, re, sys, urllib.request
 from datetime import datetime, timedelta, timezone
 
 GITHUB_TOKEN = os.environ['GH_PROJECT_TOKEN']
 POWER_AUTOMATE_URL = os.environ['POWER_AUTOMATE_URL']
-TARGET_USER = 'farmanahmed888'
 ORG = 'A4i-tech'
 PR_REPOS = ['byoeb', 'SEEDS', 'Shiksha-Copilot', 'infra-ops', 'OmniIngest', 'ai-ops']
 BOT_LOGINS = {'a4i-architect'}
@@ -20,22 +19,17 @@ def gh_graphql(query, variables=None):
             'User-Agent': 'standup-bot'
         }
     )
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        out = json.loads(resp.read())
+    if out.get('errors'):
+        raise RuntimeError(out['errors'])
+    return out
 
-def gh_rest(path):
-    req = urllib.request.Request(
-        f'https://api.github.com{path}',
-        headers={
-            'Authorization': f'Bearer {GITHUB_TOKEN}',
-            'Accept': 'application/vnd.github+json',
-            'User-Agent': 'standup-bot'
-        }
-    )
-    with urllib.request.urlopen(req) as resp:
-        return json.loads(resp.read())
+def post(url, data):
+    urllib.request.urlopen(urllib.request.Request(
+        url, data=data, headers={'Content-Type': 'application/json'}), timeout=30).close()
 
-# 1. Tickets assigned to TARGET_USER in org project #1
+# 1. Open tickets on org project #1, with owners
 PROJECT_QUERY = """
 query($org: String!, $after: String) {
   organization(login: $org) {
@@ -77,7 +71,7 @@ while True:
 tickets = {}  # (repo, number) -> {title, url, status, assignees}
 for item in items:
     content = item['content']
-    if 'repository' not in content:  # draft issue or PR item, not an Issue
+    if not content or 'repository' not in content:  # draft item, PR item or no access
         continue
     assignees = [u['login'] for u in content['assignees']['nodes']]
     if not assignees:
@@ -92,28 +86,29 @@ for item in items:
 
     repo = content['repository']['name']
     tickets[(repo, content['number'])] = {
-        'title': content['title'][:55],
+        'title': content['title'],
         'url': content['url'],
         'status': status,
         'assignees': assignees,
     }
 
-# 2. Open and merged PRs in the tracked repos, with the issues each PR closes.
-# Merged PRs count as "handled" (e.g. merged to a staging branch that never
-# auto-closed the issue) even though they no longer need review.
+# 2. Open PRs in the tracked repos, linked to tickets by closing keywords or any #N / owner/repo#N in the body
 PR_QUERY = """
 query($owner: String!, $repo: String!, $after: String) {
   repository(owner: $owner, name: $repo) {
-    pullRequests(states: [OPEN, MERGED], first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
+    pullRequests(states: [OPEN], first: 100, after: $after, orderBy: {field: UPDATED_AT, direction: DESC}) {
       pageInfo { hasNextPage endCursor }
       nodes {
-        number title url createdAt state isDraft mergeable
+        number title url body createdAt isDraft mergeable
         author { login }
         closingIssuesReferences(first: 10) {
           nodes { number repository { name } }
         }
         reviewRequests(first: 10) {
-          nodes { requestedReviewer { ... on User { login } } }
+          nodes { requestedReviewer { ... on User { login } ... on Team { name } } }
+        }
+        timelineItems(itemTypes: [REVIEW_REQUESTED_EVENT], first: 1) {
+          nodes { ... on ReviewRequestedEvent { createdAt } }
         }
       }
     }
@@ -122,11 +117,18 @@ query($owner: String!, $repo: String!, $after: String) {
 """
 
 def pending_reviewers(pr):
-    requested = {
-        n['requestedReviewer']['login'] for n in pr['reviewRequests']['nodes']
-        if n['requestedReviewer']
-    }
-    return requested - BOT_LOGINS
+    names = set()
+    for n in pr['reviewRequests']['nodes']:
+        r = n['requestedReviewer']
+        if r:
+            names.add(r.get('login') or r.get('name'))
+    return names - BOT_LOGINS - {None}
+
+def linked_tickets(pr):
+    refs = {(i['repository']['name'], i['number']) for i in pr['closingIssuesReferences']['nodes']}
+    for m in re.finditer(r'(?:%s/([\w.-]+))?#(\d+)' % ORG, pr['body'] or ''):
+        refs.add((m.group(1) or pr['_repo'], int(m.group(2))))
+    return refs
 
 def fetch_prs(pr_repo):
     prs, after = [], None
@@ -138,32 +140,17 @@ def fetch_prs(pr_repo):
             return prs
         after = page['pageInfo']['endCursor']
 
-pr_by_ticket = {}  # (issue_repo, issue_number) -> open pr dict
-draft_by_ticket = {}  # (issue_repo, issue_number) -> draft pr dict
+pr_by_ticket = {}  # (issue_repo, issue_number) -> ready PR
+draft_by_ticket = {}  # (issue_repo, issue_number) -> draft PR
 for pr_repo in PR_REPOS:
-    prs = fetch_prs(pr_repo)
-    for pr in prs:
+    for pr in fetch_prs(pr_repo):
         pr['_repo'] = pr_repo
-        if pr['isDraft']:  # not ready for review; keep separate from "no PR yet"
-            for closed_issue in pr['closingIssuesReferences']['nodes']:
-                key = (closed_issue['repository']['name'], closed_issue['number'])
-                if key in tickets and key not in draft_by_ticket:
-                    draft_by_ticket[key] = pr
-            continue
         pr['_reviewers'] = pending_reviewers(pr)
-        for closed_issue in pr['closingIssuesReferences']['nodes']:
-            key = (closed_issue['repository']['name'], closed_issue['number'])
-            if key not in tickets:
-                continue
-            if pr['state'] == 'OPEN' and key not in pr_by_ticket:
-                pr_by_ticket[key] = pr
+        target = draft_by_ticket if pr['isDraft'] else pr_by_ticket
+        for key in linked_tickets(pr) & tickets.keys():
+            target.setdefault(key, pr)
 
-# 3. First "review requested" timestamp per matched PR (fallback: PR createdAt)
-def review_raised_at(repo, pr):
-    events = gh_rest(f'/repos/{ORG}/{repo}/issues/{pr["number"]}/timeline?per_page=100')
-    requested = [e['created_at'] for e in events if e['event'] == 'review_requested']
-    return min(requested) if requested else pr['createdAt']
-
+# 3. Age in working days since review was first requested (fallback: PR createdAt)
 def days_since(iso_ts):
     start = datetime.strptime(iso_ts, '%Y-%m-%dT%H:%M:%SZ').date()
     elapsed = (datetime.now(timezone.utc).date() - start).days
@@ -176,108 +163,91 @@ def traffic_light(days):
         return '🟡'
     return '🔴'
 
-MAX_ISSUE_TEXT = 100  # visible chars of "repo#num title" in a card cell
+def review_age(pr):
+    nodes = pr['timelineItems']['nodes']
+    return days_since(nodes[0]['createdAt'] if nodes else pr['createdAt'])
 
-def middle_ellipsis(text, limit):
-    if len(text) <= limit:
-        return text
-    keep = max(limit - 1, 2)
-    head = (keep + 1) // 2
-    return text[:head].rstrip() + '…' + text[len(text) - (keep - head):].lstrip()
+def link(text, url):
+    return f'[{text.replace("[", "(").replace("]", ")")}]({url})'
 
-reviewed_rows, draft_rows, conflict_rows = [], [], []
+def author(pr):
+    return pr['author']['login'] if pr['author'] else 'unknown'
+
+rows = []  # one per ticket needing someone's attention
 for key, ticket in tickets.items():
-    repo, issue_num = key
+    repo, num = key
+    owners = ticket['assignees']
+    label = f'{repo}#{num} {ticket["title"][:60]}'
     pr = pr_by_ticket.get(key)
-    prefix = f'{repo}#{issue_num}'
-    title = middle_ellipsis(ticket['title'], MAX_ISSUE_TEXT - len(prefix) - 1)
-    issue_md = f'[{prefix}]({ticket["url"]}) {title}'
+    draft = draft_by_ticket.get(key)
     if pr:
-        days = days_since(review_raised_at(pr['_repo'], pr))
-        pr_md = f'[{pr["_repo"]}#{pr["number"]}]({pr["url"]})'
-        opened_by = pr['author']['login'] if pr['author'] else 'unknown'
-        if pr['mergeable'] == 'CONFLICTING':
-            conflict_rows.append([issue_md, opened_by, pr_md, f'{days}d'])
-        else:
-            emergency = ' 🚨' if days > 15 else ''
-            reviewed_rows.append({
-                'reviewers': pr['_reviewers'],
-                'card': [issue_md, opened_by, pr_md, f'{traffic_light(days)} {days}d{emergency}'],
-            })
-    elif key in draft_by_ticket:
-        draft_pr = draft_by_ticket[key]
-        draft_rows.append([
-            issue_md,
-            f'[{draft_pr["_repo"]}#{draft_pr["number"]}]({draft_pr["url"]})',
-            draft_pr['author']['login'] if draft_pr['author'] else 'unknown',
-        ])
+        kind = 'conflict' if pr['mergeable'] == 'CONFLICTING' else 'review'
+        who = owners if kind == 'conflict' else sorted(pr['_reviewers']) or owners
+        days, src = review_age(pr), pr
+    elif draft:
+        kind, who, days, src = 'draft', owners, days_since(draft['createdAt']), draft
+    else:
+        continue
+    prn = f'{src["_repo"]}#{src["number"]}'
+    rows.append({
+        'kind': kind, 'who': who, 'days': days, 'url': src['url'], 'label': f'{label} ({prn})',
+        'md': f'{link(label, ticket["url"])} ({link(prn, src["url"])}, owner {"/".join(owners)}, PR by {author(src)})',
+    })
 
-rows_by_reviewer = {}
-for r in reviewed_rows:
-    for reviewer in r['reviewers']:
-        rows_by_reviewer.setdefault(reviewer, []).append(r)
+by_person = {}
+for r in rows:
+    for p in r['who']:
+        by_person.setdefault(p.lower(), []).append(r)
 
 PROJECT_BOARD_URL = f'https://github.com/orgs/{ORG}/projects/1/views/2'
-
-def card_table(rows, columns, widths):
-    def cell(text, bold=False):
-        return {'type': 'TableCell', 'items': [{'type': 'TextBlock', 'text': text, 'wrap': True, 'weight': 'Bolder' if bold else 'Default'}]}
-    return {
-        'type': 'Table',
-        'firstRowAsHeaders': True,
-        'columns': [{'width': w} for w in widths],
-        'rows': [{'type': 'TableRow', 'cells': [cell(c, True) for c in columns]}]
-        + [{'type': 'TableRow', 'cells': [cell(c) for c in r]} for r in rows],
-    }
-
-def card_heading(text):
-    return {'type': 'TextBlock', 'text': text, 'weight': 'Bolder', 'size': 'Medium', 'separator': True}
-
-# Teams rejects messages over ~28 KB (RequestEntityTooLarge), so the report is
-# split across several cards; MAX_ROWS keeps each well under that.
-MAX_ROWS = 20
-
 LEGEND = '🟢 0-2 days · 🟡 3-5 days · 🔴 6+ days · 🚨 15+ days'
+KINDS = ('review', 'conflict', 'draft')
 
-def payload(body):
-    return json.dumps({
-        'type': 'message',
-        'attachments': [{
-            'contentType': 'application/vnd.microsoft.card.adaptive',
-            'content': {
-                '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-                'type': 'AdaptiveCard',
-                'version': '1.5',
-                'msteams': {'width': 'Full'},
-                'body': body,
-            },
-        }],
-    }, separators=(',', ':')).encode()
+def person_line(p, rs):
+    counts = ', '.join(f'{n} {k}' for k in KINDS if (n := sum(r['kind'] == k for r in rs)))
+    w = max(rs, key=lambda r: r['days'])
+    tail = f' · oldest {traffic_light(w["days"])} {w["days"]}d{" 🚨" if w["days"] > 15 else ""} {w["md"]}' if w['days'] > 2 else ' · all fresh'
+    return {'type': 'TextBlock', 'wrap': True, 'spacing': 'Small', 'text': f'**{p}**: {counts}{tail}'}
 
-sections = [(f'Needs review from {reviewer} ({len(rows_by_reviewer[reviewer])})',
-             ['Issue', 'Opened By', 'PR', 'Status'], [4, 2, 3, 2],
-             [r['card'] for r in rows_by_reviewer[reviewer]])
-            for reviewer in sorted(rows_by_reviewer, key=str.lower)]
-if conflict_rows:
-    sections.append((f'Merge Conflicts ({len(conflict_rows)})',
-                     ['Issue', 'Opened By', 'PR', 'Days'], [4, 2, 3, 1], conflict_rows))
-if draft_rows:
-    sections.append((f'Draft PRs ({len(draft_rows)})',
-                     ['Issue', 'PR', 'Author'], [4, 3, 2], draft_rows))
-
-# One card per section (per reviewer, conflicts, drafts); long sections continue on further cards.
-bodies = [[card_heading(heading + (' (cont.)' if i else '')), card_table(rows[i:i + MAX_ROWS], columns, widths)]
-          for heading, columns, widths, rows in sections
-          for i in range(0, len(rows), MAX_ROWS)]
-
-bodies[0] = [
+body = [
     {'type': 'TextBlock', 'text': 'Daily Standup - GitHub Tasks', 'weight': 'Bolder', 'size': 'Large'},
-    {'type': 'TextBlock', 'text': LEGEND, 'wrap': True},
-] + bodies[0]
-bodies[-1].append({'type': 'TextBlock', 'text': f'[View the full list on the project board]({PROJECT_BOARD_URL})'})
+    {'type': 'TextBlock', 'text': LEGEND, 'wrap': True, 'isSubtle': True},
+] + ([person_line(p, by_person[p]) for p in sorted(by_person)] or [{'type': 'TextBlock', 'text': 'Nothing pending'}])
+body.append({'type': 'TextBlock', 'text': f'[View the full list on the project board]({PROJECT_BOARD_URL})'})
 
-for body in bodies:
-    urllib.request.urlopen(urllib.request.Request(
-        POWER_AUTOMATE_URL, data=payload(body),
-        headers={'Content-Type': 'application/json'},
-    )).close()
+post(POWER_AUTOMATE_URL, json.dumps({
+    'type': 'message',
+    'attachments': [{
+        'contentType': 'application/vnd.microsoft.card.adaptive',
+        'content': {
+            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+            'type': 'AdaptiveCard',
+            'version': '1.5',
+            'msteams': {'width': 'Full'},
+            'body': body,
+        },
+    }],
+}, separators=(',', ':')).encode())
+
+# 4. Individual emails via a second Power Automate flow; Teams is already sent
+emails = {k.lower(): v for k, v in json.loads(os.environ.get('EMAIL_MAP') or '{}').items()}
+mail_url = os.environ.get('EMAIL_FLOW_URL')
+failed = 0
+for p, rs in by_person.items():
+    to = emails.get(p)
+    if not (mail_url and to):
+        continue
+    li = ''.join(
+        f'<li>{r["kind"]} · {r["days"]}d · <a href="{r["url"]}">{html.escape(r["label"])}</a></li>'
+        for r in sorted(rs, key=lambda r: -r['days'])
+    )
+    try:
+        post(mail_url, json.dumps({
+            'to': to,
+            'subject': f'Standup: {len(rs)} pending for you',
+            'html': f'<p>Hi {html.escape(p)}, your items:</p><ul>{li}</ul><p><a href="{PROJECT_BOARD_URL}">Project board</a></p>',
+        }).encode())
+    except Exception as e:
+        failed += 1
+        print(f'email to {p} failed: {e}')
+sys.exit(1 if failed else 0)
