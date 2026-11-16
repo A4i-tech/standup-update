@@ -191,7 +191,7 @@ for key, ticket in tickets.items():
     prn = f'{src["_repo"]}#{src["number"]}'
     rows.append({
         'kind': kind, 'who': who, 'days': days, 'url': src['url'], 'label': f'{label} ({prn})',
-        'md': f'{link(label, ticket["url"])} ({link(prn, src["url"])}, owner {"/".join(owners)}, PR by {author(src)})',
+        'cells': [link(label, ticket['url']), link(prn, src['url']), '/'.join(owners), author(src)],
     })
 
 by_person = {}
@@ -203,14 +203,29 @@ PROJECT_BOARD_URL = f'https://github.com/orgs/{ORG}/projects/1/views/2'
 LEGEND = '🟢 0-2 days · 🟡 3-5 days · 🔴 6+ days · 🚨 15+ days'
 MAX_CARD_BYTES = 20000  # Teams rejects messages over ~28 KB
 
-def item_line(r):
-    emergency = ' 🚨' if r['days'] > 15 else ''
-    return {'type': 'TextBlock', 'wrap': True, 'spacing': 'None', 'text': f'{traffic_light(r["days"])} {r["days"]}d{emergency} · {r["kind"]} · {r["md"]}'}
+COLUMNS = ['Age', 'Type', 'Ticket', 'PR', 'Owner', 'PR By']
+WIDTHS = [2, 2, 6, 3, 2, 2]
+MAX_ROWS = 20
 
-blocks = []
+def cell(text, bold=False):
+    return {'type': 'TableCell', 'items': [{'type': 'TextBlock', 'text': text, 'wrap': True, 'weight': 'Bolder' if bold else 'Default'}]}
+
+def person_table(rs):
+    rows = [[f'{traffic_light(r["days"])} {r["days"]}d{" 🚨" if r["days"] > 15 else ""}', r['kind']] + r['cells'] for r in rs]
+    return {
+        'type': 'Table',
+        'firstRowAsHeaders': True,
+        'columns': [{'width': w} for w in WIDTHS],
+        'rows': [{'type': 'TableRow', 'cells': [cell(c, True) for c in COLUMNS]}]
+        + [{'type': 'TableRow', 'cells': [cell(c) for c in row]} for row in rows],
+    }
+
+blocks = []  # one block per person, split every MAX_ROWS rows
 for p in sorted(by_person):
     rs = sorted(by_person[p], key=lambda r: -r['days'])
-    blocks.append([{'type': 'TextBlock', 'text': f'{p} ({len(rs)})', 'weight': 'Bolder', 'size': 'Medium', 'separator': True}] + [item_line(r) for r in rs])
+    for i in range(0, len(rs), MAX_ROWS):
+        head = f'{p} ({len(rs)})' + (' (cont.)' if i else '')
+        blocks.append([{'type': 'TextBlock', 'text': head, 'weight': 'Bolder', 'size': 'Medium', 'separator': True}, person_table(rs[i:i + MAX_ROWS])])
 
 title = [
     {'type': 'TextBlock', 'text': 'Daily Standup - GitHub Tasks', 'weight': 'Bolder', 'size': 'Large'},
