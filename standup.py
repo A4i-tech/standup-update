@@ -191,6 +191,7 @@ for key, ticket in tickets.items():
     prn = f'{src["_repo"]}#{src["number"]}'
     rows.append({
         'kind': kind, 'who': who, 'days': days, 'url': src['url'], 'label': f'{label} ({prn})',
+        'tlabel': label, 'turl': ticket['url'], 'prn': prn, 'owner': '/'.join(owners), 'author': author(src),
         'cells': [link(label, ticket['url']), link(prn, src['url']), '/'.join(owners), author(src)],
     })
 
@@ -282,4 +283,25 @@ for p, rs in by_person.items():
     except Exception as e:
         failed += 1
         print(f'email to {p} failed: {e}')
+digest = os.environ.get('DIGEST_EMAIL')
+if mail_url and digest and by_person:
+    def tr(r):
+        age = f'{traffic_light(r["days"])} {r["days"]}d'
+        t = f'<a href="{r["turl"]}">{html.escape(r["tlabel"])}</a>'
+        cols = [age, r['kind'], t, f'<a href="{r["url"]}">{r["prn"]}</a>', html.escape(r['owner']), html.escape(r['author'])]
+        return '<tr>' + ''.join(f'<td style="padding:2px 8px">{c}</td>' for c in cols) + '</tr>'
+    head = '<tr>' + ''.join(f'<th align="left" style="padding:2px 8px">{c}</th>' for c in COLUMNS) + '</tr>'
+    parts = ''.join(
+        f'<h3>{html.escape(p)} ({len(rs)})</h3><table border="1" cellspacing="0" style="border-collapse:collapse">{head}{"".join(tr(r) for r in sorted(rs, key=lambda r: -r["days"]))}</table>'
+        for p, rs in sorted(by_person.items())
+    )
+    try:
+        post(mail_url, json.dumps({
+            'to': digest,
+            'subject': f'Daily Standup: {len(rows)} pending items',
+            'html': f'<p>{LEGEND}</p>{parts}<p><a href="{PROJECT_BOARD_URL}">Project board</a></p>',
+        }).encode())
+    except Exception as e:
+        failed += 1
+        print(f'digest email failed: {e}')
 sys.exit(1 if failed else 0)
