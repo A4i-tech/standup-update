@@ -201,33 +201,50 @@ for r in rows:
 
 PROJECT_BOARD_URL = f'https://github.com/orgs/{ORG}/projects/1/views/2'
 LEGEND = '🟢 0-2 days · 🟡 3-5 days · 🔴 6+ days · 🚨 15+ days'
-KINDS = ('review', 'conflict', 'draft')
+MAX_CARD_BYTES = 20000  # Teams rejects messages over ~28 KB
 
-def person_line(p, rs):
-    counts = ', '.join(f'{n} {k}' for k in KINDS if (n := sum(r['kind'] == k for r in rs)))
-    w = max(rs, key=lambda r: r['days'])
-    tail = f' · oldest {traffic_light(w["days"])} {w["days"]}d{" 🚨" if w["days"] > 15 else ""} {w["md"]}' if w['days'] > 2 else ' · all fresh'
-    return {'type': 'TextBlock', 'wrap': True, 'spacing': 'Small', 'text': f'**{p}**: {counts}{tail}'}
+def item_line(r):
+    emergency = ' 🚨' if r['days'] > 15 else ''
+    return {'type': 'TextBlock', 'wrap': True, 'spacing': 'None', 'text': f'{traffic_light(r["days"])} {r["days"]}d{emergency} · {r["kind"]} · {r["md"]}'}
 
-body = [
+blocks = []
+for p in sorted(by_person):
+    rs = sorted(by_person[p], key=lambda r: -r['days'])
+    blocks.append([{'type': 'TextBlock', 'text': f'{p} ({len(rs)})', 'weight': 'Bolder', 'size': 'Medium', 'separator': True}] + [item_line(r) for r in rs])
+
+title = [
     {'type': 'TextBlock', 'text': 'Daily Standup - GitHub Tasks', 'weight': 'Bolder', 'size': 'Large'},
     {'type': 'TextBlock', 'text': LEGEND, 'wrap': True, 'isSubtle': True},
-] + ([person_line(p, by_person[p]) for p in sorted(by_person)] or [{'type': 'TextBlock', 'text': 'Nothing pending'}])
-body.append({'type': 'TextBlock', 'text': f'[View the full list on the project board]({PROJECT_BOARD_URL})'})
+]
+footer = {'type': 'TextBlock', 'text': f'[View the full list on the project board]({PROJECT_BOARD_URL})'}
 
-post(POWER_AUTOMATE_URL, json.dumps({
-    'type': 'message',
-    'attachments': [{
-        'contentType': 'application/vnd.microsoft.card.adaptive',
-        'content': {
-            '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
-            'type': 'AdaptiveCard',
-            'version': '1.5',
-            'msteams': {'width': 'Full'},
-            'body': body,
-        },
-    }],
-}, separators=(',', ':')).encode())
+def card(body):
+    return json.dumps({
+        'type': 'message',
+        'attachments': [{
+            'contentType': 'application/vnd.microsoft.card.adaptive',
+            'content': {
+                '$schema': 'http://adaptivecards.io/schemas/adaptive-card.json',
+                'type': 'AdaptiveCard',
+                'version': '1.5',
+                'msteams': {'width': 'Full'},
+                'body': body,
+            },
+        }],
+    }, separators=(',', ':')).encode()
+
+# Pack whole person groups into cards, starting a new card when the size cap is hit.
+bodies, cur = [], title[:]
+for group in blocks or [[{'type': 'TextBlock', 'text': 'Nothing pending'}]]:
+    if len(cur) > len(title) and len(card(cur + group)) > MAX_CARD_BYTES:
+        bodies.append(cur)
+        cur = []
+    cur += group
+bodies.append(cur)
+bodies[-1].append(footer)
+
+for b in bodies:
+    post(POWER_AUTOMATE_URL, card(b))
 
 # 4. Individual emails via a second Power Automate flow; Teams is already sent
 emails = {k.lower(): v for k, v in json.loads(os.environ.get('EMAIL_MAP') or '{}').items()}
