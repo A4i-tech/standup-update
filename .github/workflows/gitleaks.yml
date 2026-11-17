@@ -1,0 +1,49 @@
+name: Gitleaks
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: gitleaks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Gitleaks canary self-test
+        run: |
+          mkdir -p /tmp/canary
+          CANARY_TOKEN="ghp_$(openssl rand -hex 20 | cut -c1-36)"
+          echo "GITHUB_TOKEN=${CANARY_TOKEN}" > /tmp/canary/canary.env
+          status=0
+          docker run --rm -v "/tmp/canary:/repo" \
+            zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            detect --source=/repo --no-git --exit-code 99 || status=$?
+          if [ "$status" -ne 99 ]; then
+            echo "::error::canary secret not detected (exit $status), gitleaks image/invocation is broken"
+            exit 1
+          fi
+
+      - name: Gitleaks diff scan
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          EVENT_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          BASE_SHA=$(git merge-base "origin/$BASE_REF" HEAD 2>/dev/null || echo "$EVENT_BASE_SHA")
+          docker run --rm -v "$PWD:/repo" \
+            zricethezav/gitleaks@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f \
+            git /repo --redact -v \
+            --log-opts="--no-merges $BASE_SHA..HEAD"
