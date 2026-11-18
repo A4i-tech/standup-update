@@ -8,6 +8,7 @@ on:
 jobs:
   standup:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -15,4 +16,7 @@ jobs:
         env:
           GH_PROJECT_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
           POWER_AUTOMATE_URL: ${{ secrets.POWER_AUTOMATE_URL }}
+          EMAIL_FLOW_URL: ${{ secrets.EMAIL_FLOW_URL }}
+          EMAIL_MAP: ${{ secrets.EMAIL_MAP }}
+          DIGEST_EMAIL: ${{ secrets.DIGEST_EMAIL }}
         run: python3 standup.py
